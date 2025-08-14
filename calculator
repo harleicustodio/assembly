@@ -1,0 +1,253 @@
+
+; Ask first number, second number, then 1=add / 2=sub / 3=mul / 4=div
+
+section .data
+    msg1    db "Enter the first number: ",0
+    len1    equ $-msg1
+    msg2    db "Enter the second number: ",0
+    len2    equ $-msg2
+    msg3    db "Type 1 to add, 2 to subtract, 3 to multiply, 4 to divide: ",0
+    len3    equ $-msg3
+    msgRes  db "Result: ",0
+    lenRes  equ $-msgRes
+    newline db 10,0
+
+section .bss
+    num1   resb 32
+    num2   resb 32
+    op     resb 8
+    outbuf resb 32
+
+section .text
+    global _start
+
+_start:
+    ; --- ask first number ---
+    mov eax, 4        ; write(1, msg1, len1)
+    mov ebx, 1
+    mov ecx, msg1
+    mov edx, len1
+    int 0x80
+
+    mov eax, 3        ; read(0, num1, 32)
+    mov ebx, 0
+    mov ecx, num1
+    mov edx, 32
+    int 0x80
+
+    mov ecx, num1
+    call atoi
+    mov esi, eax      ; first number
+
+    ; --- ask second number ---
+    mov eax, 4
+    mov ebx, 1
+    mov ecx, msg2
+    mov edx, len2
+    int 0x80
+
+    mov eax, 3
+    mov ebx, 0
+    mov ecx, num2
+    mov edx, 32
+    int 0x80
+
+    mov ecx, num2
+    call atoi
+    mov edi, eax      ; second number
+
+    ; --- ask op ---
+    mov eax, 4
+    mov ebx, 1
+    mov ecx, msg3
+    mov edx, len3
+    int 0x80
+
+    mov eax, 3
+    mov ebx, 0
+    mov ecx, op
+    mov edx, 8
+    int 0x80
+
+    mov ecx, op
+    call atoi
+    mov ebp, eax      ; choice
+
+    cmp ebp, 1
+    je do_add
+    cmp ebp, 2
+    je do_sub
+    cmp ebp, 3
+    je do_mul
+    cmp ebp, 4
+    je do_div
+    jmp done          ; invalid choice -> exit
+
+do_add:
+    mov eax, esi
+    add eax, edi
+    jmp print_result
+
+do_sub:
+    mov eax, esi
+    sub eax, edi
+    jmp print_result
+
+do_mul:
+    mov eax, esi
+    imul eax, edi
+    jmp print_result
+
+do_div:
+    mov eax, esi
+    cdq                 ; sign-extend into EDX
+    cmp edi, 0
+    je done             ; avoid div by zero
+    idiv edi
+    jmp print_result
+
+print_result:
+    ; eax = result
+    mov ecx, outbuf
+    call itoa         ; returns EDX = length, buffer at outbuf
+
+    ; "Result: "
+    mov eax, 4
+    mov ebx, 1
+    mov ecx, msgRes
+    mov edx, lenRes
+    int 0x80
+
+    ; number
+    mov eax, 4
+    mov ebx, 1
+    mov ecx, outbuf
+    ; edx already = length from itoa
+    int 0x80
+
+    ; newline
+    mov eax, 4
+    mov ebx, 1
+    mov ecx, newline
+    mov edx, 1
+    int 0x80
+
+done:
+    mov eax, 1
+    xor ebx, ebx
+    int 0x80
+
+; -----------------------------
+; atoi: parse int (handles +/-, stops on CR/LF/non-digit)
+; in:  ECX = pointer to buffer
+; out: EAX = value
+atoi:
+    xor eax, eax          ; value
+    xor ebx, ebx          ; sign flag (0=+, 1=-)
+
+.skip_ws:
+    mov dl, [ecx]
+    cmp dl, ' '
+    je .adv
+    cmp dl, 9             ; tab
+    je .adv
+    jmp .check_sign
+.adv:
+    inc ecx
+    jmp .skip_ws
+
+.check_sign:
+    mov dl, [ecx]
+    cmp dl, '-'
+    jne .maybe_plus
+    mov ebx, 1
+    inc ecx
+    jmp .digits
+.maybe_plus:
+    cmp dl, '+'
+    jne .digits
+    inc ecx
+
+.digits:
+    mov dl, [ecx]
+    cmp dl, 10            ; '\n'
+    je .apply_sign
+    cmp dl, 13            ; '\r'
+    je .apply_sign
+    cmp dl, '0'
+    jb .apply_sign
+    cmp dl, '9'
+    ja .apply_sign
+    sub dl, '0'
+    imul eax, eax, 10
+    add eax, edx
+    inc ecx
+    jmp .digits
+
+.apply_sign:
+    cmp ebx, 0
+    je .atoi_done
+    neg eax
+.atoi_done:
+    ret
+
+; -----------------------------
+; itoa: convert EAX (signed) -> string at ECX
+; returns: EDX = length
+itoa:
+    push ebp
+    mov ebp, ecx          ; start pointer
+    mov edi, ecx          ; write ptr
+
+    mov ebx, 0            ; sign flag
+    cmp eax, 0
+    jge .abs_ok
+    neg eax
+    mov ebx, 1
+.abs_ok:
+    ; special case 0
+    cmp eax, 0
+    jne .extract
+    mov byte [edi], '0'
+    mov edx, 1
+    jmp .maybe_sign_done
+
+.extract:
+    xor esi, esi          ; digit count
+.extract_loop:
+    xor edx, edx          ; CLEAR EDX before div!
+    mov ecx, 10
+    div ecx               ; EDX = remainder, EAX = EAX/10
+    add dl, '0'
+    push edx              ; save digit char
+    inc esi
+    test eax, eax
+    jnz .extract_loop
+
+    ; add '-' if negative
+    cmp ebx, 0
+    je .write_digits
+    mov byte [edi], '-'
+    inc edi
+
+.write_digits:
+    mov ecx, esi
+.write_loop:
+    cmp ecx, 0
+    je .finish
+    pop eax
+    mov [edi], al
+    inc edi
+    dec ecx
+    jmp .write_loop
+
+.finish:
+    mov edx, edi
+    sub edx, ebp          ; length
+    jmp .itoa_done
+
+.maybe_sign_done:
+    mov edx, 1
+.itoa_done:
+    pop ebp
+    ret
